@@ -1,0 +1,229 @@
+<meta charset="utf-8">
+<title>System Design Lab</title>
+<style>
+  :root {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.14);
+    --good: #1B8A5A;
+    --good-bg: rgba(27, 138, 90, 0.1);
+    --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220;
+      --panel: #121B2E;
+      --panel-border: #243252;
+      --panel-border-strong: #344368;
+      --text: #E7ECF7;
+      --text-muted: #93A0BE;
+      --text-faint: #5E6B8C;
+      --accent: #FFA94D;
+      --accent-strong: #FFC287;
+      --accent-glow: rgba(255, 169, 77, 0.16);
+      --good: #4ADE80;
+      --good-bg: rgba(74, 222, 128, 0.12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+    --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+    --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.16);
+    --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.12);
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF1F6; --panel: #FFFFFF; --panel-border: #D7DEE8; --panel-border-strong: #C1CADA;
+    --text: #12182B; --text-muted: #5B6478; --text-faint: #8791A8;
+    --accent: #C2660D; --accent-strong: #9C5209; --accent-glow: rgba(194, 102, 13, 0.14);
+    --good: #1B8A5A; --good-bg: rgba(27, 138, 90, 0.1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    padding: clamp(20px, 5vw, 56px);
+  }
+
+  .wrap { max-width: 880px; margin: 0 auto; }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(28px, 4.5vw, 38px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin: 0 0 10px;
+    text-wrap: balance;
+  }
+
+  .lede {
+    color: var(--text-muted);
+    font-size: 15.5px;
+    line-height: 1.6;
+    max-width: 60ch;
+    margin: 0 0 40px;
+  }
+
+  .days {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .day-card {
+    display: grid;
+    grid-template-columns: 64px 1fr auto;
+    align-items: center;
+    gap: 18px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  @media (max-width: 640px) {
+    .day-card {
+      grid-template-columns: 1fr;
+      text-align: left;
+    }
+    .day-card .cta { justify-self: start; }
+  }
+
+  .day-num {
+    font-family: var(--font-mono);
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .day-card.live .day-num { color: var(--accent); }
+
+  .day-body h2 {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 700;
+    margin: 0 0 4px;
+  }
+  .day-body p {
+    font-size: 13.5px;
+    color: var(--text-muted);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    margin-bottom: 6px;
+  }
+  .status.live { color: var(--good); background: var(--good-bg); }
+  .status.soon { color: var(--text-faint); background: var(--bg); border: 1px solid var(--panel-border-strong); }
+
+  .cta {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    padding: 9px 16px;
+    border-radius: 7px;
+    white-space: nowrap;
+  }
+  .cta.enabled {
+    color: var(--bg);
+    background: var(--accent);
+  }
+  .cta.enabled:hover { background: var(--accent-strong); }
+  .cta.disabled {
+    color: var(--text-faint);
+    background: transparent;
+    border: 1px solid var(--panel-border-strong);
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .footer {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-faint);
+    text-align: center;
+    margin-top: 44px;
+  }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">System Design Lab</p>
+  <h1>Learning system design, one day at a time</h1>
+  <p class="lede">A full-stack dev's system design notes &mdash; interview-prep focused, taught from scratch. Each day pairs a concept with a small interactive tool you can actually play with, not just read about.</p>
+
+  <div class="days">
+    <div class="day-card live">
+      <div class="day-num">01</div>
+      <div class="day-body">
+        <span class="status live">Tool live</span>
+        <h2>Foundations</h2>
+        <p>Functional vs non-functional requirements, vertical vs horizontal scaling, availability &amp; the nines, back-of-envelope estimation.</p>
+      </div>
+      <a class="cta enabled" href="day01-foundations/capacity-calculator.html">Open tool &rarr;</a>
+    </div>
+
+    <div class="day-card">
+      <div class="day-num">02</div>
+      <div class="day-body">
+        <span class="status soon">Tool coming soon</span>
+        <h2>Networking Basics</h2>
+        <p>DNS as a load-distribution layer, TCP vs UDP, HTTP/1.1 &rarr; HTTP/2 &rarr; HTTP/3, statelessness, REST vs gRPC vs WebSockets.</p>
+      </div>
+      <a class="cta disabled" href="#" aria-disabled="true">Coming soon</a>
+    </div>
+
+    <div class="day-card">
+      <div class="day-num">03</div>
+      <div class="day-body">
+        <span class="status soon">Tool coming soon</span>
+        <h2>Load Balancers &amp; Scaling</h2>
+        <p>L4 vs L7, load balancing algorithms, health checks, auto-scaling, single points of failure.</p>
+      </div>
+      <a class="cta disabled" href="#" aria-disabled="true">Coming soon</a>
+    </div>
+
+    <div class="day-card">
+      <div class="day-num">04</div>
+      <div class="day-body">
+        <span class="status soon">Tool coming soon</span>
+        <h2>Databases I</h2>
+        <p>SQL vs NoSQL, indexing trade-offs, leader-follower replication and read replicas.</p>
+      </div>
+      <a class="cta disabled" href="#" aria-disabled="true">Coming soon</a>
+    </div>
+  </div>
+
+  <p class="footer">More days added as the series continues.</p>
+</div>
