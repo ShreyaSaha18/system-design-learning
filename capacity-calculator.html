@@ -1,0 +1,471 @@
+<meta charset="utf-8">
+<title>Capacity &amp; Uptime Calculator &mdash; System Design Lab</title>
+<style>
+  :root {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.18);
+    --track-bg: #E4E9F2;
+    --good: #1B8A5A;
+    --warn: #B7791E;
+    --crit: #C23B3B;
+    --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220;
+      --panel: #121B2E;
+      --panel-border: #243252;
+      --panel-border-strong: #344368;
+      --text: #E7ECF7;
+      --text-muted: #93A0BE;
+      --text-faint: #5E6B8C;
+      --accent: #FFA94D;
+      --accent-strong: #FFC287;
+      --accent-glow: rgba(255, 169, 77, 0.22);
+      --track-bg: #1B2540;
+      --good: #4ADE80;
+      --warn: #FBBF24;
+      --crit: #F87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B1220;
+    --panel: #121B2E;
+    --panel-border: #243252;
+    --panel-border-strong: #344368;
+    --text: #E7ECF7;
+    --text-muted: #93A0BE;
+    --text-faint: #5E6B8C;
+    --accent: #FFA94D;
+    --accent-strong: #FFC287;
+    --accent-glow: rgba(255, 169, 77, 0.22);
+    --track-bg: #1B2540;
+    --good: #4ADE80;
+    --warn: #FBBF24;
+    --crit: #F87171;
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.18);
+    --track-bg: #E4E9F2;
+    --good: #1B8A5A;
+    --warn: #B7791E;
+    --crit: #C23B3B;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    padding: clamp(16px, 4vw, 48px);
+  }
+
+  .rig {
+    max-width: 980px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(26px, 4vw, 34px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin: 4px 0 0;
+    text-wrap: balance;
+  }
+
+  .lede {
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.55;
+    max-width: 62ch;
+    margin: 0;
+  }
+
+  .panels {
+    display: grid;
+    grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+    gap: 16px;
+  }
+  @media (max-width: 720px) {
+    .panels { grid-template-columns: 1fr; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+
+  .panel-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 0 0 16px;
+  }
+
+  .field {
+    margin-bottom: 18px;
+  }
+  .field:last-child { margin-bottom: 0; }
+
+  .field label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .field label .val {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  input[type="number"], select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--panel-border-strong);
+    border-radius: 6px;
+    padding: 9px 10px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 14px;
+  }
+  input[type="number"]:focus, select:focus, input[type="range"]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .readouts {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+  @media (max-width: 560px) {
+    .readouts { grid-template-columns: 1fr; }
+  }
+
+  .gauge {
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, var(--accent-glow), transparent 60%);
+  }
+  .gauge .g-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 0 0 6px;
+  }
+  .gauge .g-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(20px, 3vw, 26px);
+    font-weight: 700;
+    color: var(--text);
+    transition: color .3s ease;
+  }
+  .gauge.hot .g-value { color: var(--accent); }
+  .gauge .g-unit {
+    font-size: 12px;
+    color: var(--text-faint);
+    font-weight: 500;
+  }
+
+  .track-wrap { margin-top: 4px; }
+  .track {
+    position: relative;
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--crit), var(--warn) 45%, var(--good) 100%);
+    margin: 28px 4px 6px;
+  }
+  .tick {
+    position: absolute;
+    top: -14px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .tick .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 2px solid var(--panel-border-strong);
+  }
+  .tick .tlabel {
+    position: absolute;
+    top: 18px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-faint);
+    white-space: nowrap;
+  }
+  .pin {
+    position: absolute;
+    top: -22px;
+    transform: translateX(-50%);
+    transition: left .25s ease;
+  }
+  .pin .flag {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--panel-border-strong);
+    border-radius: 5px;
+    padding: 3px 7px;
+    white-space: nowrap;
+    transform: translateX(-50%);
+    margin-left: 4px;
+  }
+  .pin .needle {
+    width: 2px;
+    height: 16px;
+    background: var(--text);
+    margin: 3px auto 0;
+  }
+
+  .verdict {
+    border-top: 1px dashed var(--panel-border-strong);
+    margin-top: 20px;
+    padding-top: 16px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+  .verdict strong { color: var(--accent-strong); }
+  .verdict .fine-print {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-faint);
+  }
+
+  .footer {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-faint);
+    text-align: center;
+    padding-top: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .gauge .g-value, .pin { transition: none; }
+  }
+</style>
+
+<div class="rig">
+  <div>
+    <p class="eyebrow">System Design Lab &middot; Day 01 &middot; Foundations</p>
+    <h1>Capacity &amp; Uptime Calculator</h1>
+    <p class="lede">Turn a rough usage guess into the numbers that actually decide your architecture: requests per second, and how many minutes of downtime a year your availability target really allows.</p>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <p class="panel-label">Inputs</p>
+
+      <div class="field">
+        <label for="dau">Daily active users <span class="val" id="dauVal">10,000,000</span></label>
+        <input type="range" id="dau" min="1000" max="500000000" step="1000" value="10000000" />
+      </div>
+
+      <div class="field">
+        <label for="rpu">Requests per user / day <span class="val" id="rpuVal">5</span></label>
+        <input type="range" id="rpu" min="1" max="100" step="1" value="5" />
+      </div>
+
+      <div class="field">
+        <label for="peak">Peak multiplier <span class="val" id="peakVal">3.0&times;</span></label>
+        <input type="range" id="peak" min="1" max="8" step="0.5" value="3" />
+      </div>
+
+      <div class="field">
+        <label for="avail">Availability target</label>
+        <select id="avail">
+          <option value="99">99% &mdash; two nines</option>
+          <option value="99.9" selected>99.9% &mdash; three nines</option>
+          <option value="99.99">99.99% &mdash; four nines</option>
+          <option value="99.999">99.999% &mdash; five nines</option>
+          <option value="99.9999">99.9999% &mdash; six nines</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="cap">Assumed capacity per server <span class="val" id="capVal">1,000 req/s</span></label>
+        <input type="range" id="cap" min="100" max="5000" step="100" value="1000" />
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-label">Readouts</p>
+
+      <div class="readouts">
+        <div class="gauge">
+          <p class="g-label">Avg throughput</p>
+          <p class="g-value" id="avgQps">&mdash;</p>
+          <p class="g-unit">req/sec</p>
+        </div>
+        <div class="gauge hot">
+          <p class="g-label">Peak throughput</p>
+          <p class="g-value" id="peakQps">&mdash;</p>
+          <p class="g-unit">req/sec</p>
+        </div>
+        <div class="gauge">
+          <p class="g-label">Servers needed (rough)</p>
+          <p class="g-value" id="servers">&mdash;</p>
+          <p class="g-unit">at peak load</p>
+        </div>
+      </div>
+
+      <p class="panel-label" style="margin-bottom:0;">Downtime budget for this availability target</p>
+      <div class="track-wrap">
+        <div class="track">
+          <div class="tick" style="left:0%"><span class="dot"></span><span class="tlabel">99%</span></div>
+          <div class="tick" style="left:25%"><span class="dot"></span><span class="tlabel">99.9%</span></div>
+          <div class="tick" style="left:50%"><span class="dot"></span><span class="tlabel">99.99%</span></div>
+          <div class="tick" style="left:75%"><span class="dot"></span><span class="tlabel">99.999%</span></div>
+          <div class="tick" style="left:100%"><span class="dot"></span><span class="tlabel">99.9999%</span></div>
+          <div class="pin" id="pin" style="left:25%">
+            <span class="flag" id="downtimeFlag">8.76 hr/yr</span>
+            <span class="needle"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="verdict" id="verdict">&mdash;</div>
+    </div>
+  </div>
+
+  <p class="footer">Built while learning system design, day by day &mdash; Day 01: Foundations.</p>
+</div>
+
+<script>
+(function () {
+  const dau = document.getElementById('dau');
+  const rpu = document.getElementById('rpu');
+  const peak = document.getElementById('peak');
+  const avail = document.getElementById('avail');
+  const cap = document.getElementById('cap');
+
+  const dauVal = document.getElementById('dauVal');
+  const rpuVal = document.getElementById('rpuVal');
+  const peakVal = document.getElementById('peakVal');
+  const capVal = document.getElementById('capVal');
+
+  const avgQps = document.getElementById('avgQps');
+  const peakQps = document.getElementById('peakQps');
+  const serversEl = document.getElementById('servers');
+  const pin = document.getElementById('pin');
+  const downtimeFlag = document.getElementById('downtimeFlag');
+  const verdict = document.getElementById('verdict');
+
+  const tierPositions = { '99': 0, '99.9': 25, '99.99': 50, '99.999': 75, '99.9999': 100 };
+
+  function fmtInt(n) {
+    return Math.round(n).toLocaleString('en-US');
+  }
+
+  function fmtDowntime(seconds) {
+    if (seconds >= 86400) return (seconds / 86400).toFixed(2) + ' days/yr';
+    if (seconds >= 3600) return (seconds / 3600).toFixed(2) + ' hr/yr';
+    if (seconds >= 60) return (seconds / 60).toFixed(1) + ' min/yr';
+    return seconds.toFixed(0) + ' sec/yr';
+  }
+
+  function recalc() {
+    const dauN = parseInt(dau.value, 10);
+    const rpuN = parseInt(rpu.value, 10);
+    const peakN = parseFloat(peak.value);
+    const capN = parseInt(cap.value, 10);
+    const availN = parseFloat(avail.value);
+
+    dauVal.textContent = fmtInt(dauN);
+    rpuVal.textContent = rpuN;
+    peakVal.textContent = peakN.toFixed(1) + '×';
+    capVal.textContent = fmtInt(capN) + ' req/s';
+
+    const totalPerDay = dauN * rpuN;
+    const avg = totalPerDay / 86400;
+    const pk = avg * peakN;
+    const serversNeeded = Math.max(1, Math.ceil(pk / capN));
+
+    avgQps.textContent = fmtInt(avg);
+    peakQps.textContent = fmtInt(pk);
+    serversEl.textContent = serversNeeded;
+
+    const downtimeSeconds = (1 - availN / 100) * 365 * 86400;
+    downtimeFlag.textContent = fmtDowntime(downtimeSeconds);
+    pin.style.left = tierPositions[String(availN)] + '%';
+
+    let verdictHtml;
+    if (serversNeeded <= 1) {
+      verdictHtml = 'At <strong>' + fmtInt(pk) + ' req/sec</strong> peak, a single well-provisioned server could plausibly handle this. Scaling out isn\'t urgent yet — focus on making that one server reliable.';
+    } else if (serversNeeded <= 10) {
+      verdictHtml = 'At <strong>' + fmtInt(pk) + ' req/sec</strong> peak, you need roughly <strong>' + serversNeeded + ' servers</strong> behind a load balancer. Time to make sure your app tier is stateless.';
+    } else {
+      verdictHtml = 'At <strong>' + fmtInt(pk) + ' req/sec</strong> peak, you\'re in the territory of <strong>' + serversNeeded + ' servers</strong> — this needs real horizontal scaling: load balancing, caching, and probably read replicas or sharding downstream.';
+    }
+    verdictHtml += '<span class="fine-print">Rough gut-check only &mdash; assumes ' + fmtInt(capN) + ' req/s per server and a ' + peakN.toFixed(1) + '× peak-to-average ratio.</span>';
+    verdict.innerHTML = verdictHtml;
+  }
+
+  [dau, rpu, peak, avail, cap].forEach(el => el.addEventListener('input', recalc));
+  recalc();
+})();
+</script>
