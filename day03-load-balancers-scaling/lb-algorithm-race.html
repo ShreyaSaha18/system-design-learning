@@ -1,0 +1,346 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Load Balancer Algorithm Race &mdash; System Design Lab</title>
+<style>
+  :root {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.18);
+    --bar-track: #E4E9F2;
+    --bar-fill: #C2660D;
+    --bar-fill-strong: #9C5209;
+    --tag-bg: rgba(194, 102, 13, 0.14);
+    --good: #1B8A5A;
+    --good-bg: rgba(27, 138, 90, 0.1);
+    --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+      --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+      --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+      --bar-track: #1B2540; --bar-fill: #FFA94D; --bar-fill-strong: #FFC287;
+      --tag-bg: rgba(255, 169, 77, 0.16);
+      --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+    --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+    --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+    --bar-track: #1B2540; --bar-fill: #FFA94D; --bar-fill-strong: #FFC287;
+    --tag-bg: rgba(255, 169, 77, 0.16);
+    --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.12);
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF1F6; --panel: #FFFFFF; --panel-border: #D7DEE8; --panel-border-strong: #C1CADA;
+    --text: #12182B; --text-muted: #5B6478; --text-faint: #8791A8;
+    --accent: #C2660D; --accent-strong: #9C5209; --accent-glow: rgba(194, 102, 13, 0.18);
+    --bar-track: #E4E9F2; --bar-fill: #C2660D; --bar-fill-strong: #9C5209;
+    --tag-bg: rgba(194, 102, 13, 0.14);
+    --good: #1B8A5A; --good-bg: rgba(27, 138, 90, 0.1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased; padding: clamp(16px, 4vw, 48px);
+  }
+
+  .rig { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-family: var(--font-display); font-size: clamp(24px, 4vw, 32px); font-weight: 800;
+    letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance;
+  }
+  .lede { color: var(--text-muted); font-size: 15px; line-height: 1.55; max-width: 68ch; margin: 0; }
+
+  .panels { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .panels { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 20px; }
+  .panel-label {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 16px;
+  }
+
+  .field { margin-bottom: 18px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .field label .val {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  select {
+    width: 100%; background: var(--bg); border: 1px solid var(--panel-border-strong); border-radius: 6px;
+    padding: 9px 10px; color: var(--text); font-family: var(--font-mono); font-size: 14px;
+  }
+  input[type="range"]:focus-visible, select:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+
+  .constants {
+    margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--panel-border-strong);
+    font-size: 12px; color: var(--text-faint); line-height: 1.6;
+  }
+
+  .summary {
+    display: flex; align-items: baseline; gap: 8px; font-size: 14px; color: var(--text);
+    background: var(--good-bg); border-radius: 8px; padding: 10px 14px; margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .summary .big {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 700;
+    font-size: 18px; color: var(--good);
+  }
+
+  .rows { display: flex; flex-direction: column; gap: 10px; }
+  .row { display: grid; grid-template-columns: 96px 1fr 130px; align-items: center; gap: 12px; }
+  @media (max-width: 480px) {
+    .row { grid-template-columns: 74px 1fr; }
+    .row .meta { grid-column: 1 / -1; text-align: left; padding-top: 2px; }
+  }
+  .row .name {
+    font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--text);
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .row .tag {
+    font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--accent-strong);
+    background: var(--tag-bg); border-radius: 4px; padding: 1px 5px;
+  }
+  .bar-track {
+    position: relative; height: 20px; background: var(--bar-track); border-radius: 5px; overflow: hidden;
+  }
+  .bar-fill {
+    position: absolute; top: 0; left: 0; bottom: 0; border-radius: 5px;
+    background: linear-gradient(90deg, var(--bar-fill), var(--bar-fill-strong));
+    transition: width .3s ease;
+  }
+  .row .meta {
+    font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); text-align: right;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+
+  .verdict {
+    border-top: 1px dashed var(--panel-border-strong); margin-top: 20px; padding-top: 16px;
+    font-size: 14px; line-height: 1.6; color: var(--text);
+  }
+  .verdict strong { color: var(--accent-strong); }
+  .verdict .fine-print { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); }
+
+  .footer { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); text-align: center; padding-top: 4px; }
+
+  @media (prefers-reduced-motion: reduce) { .bar-fill { transition: none; } }
+</style>
+
+<div class="rig">
+  <div>
+    <p class="eyebrow">System Design Lab &middot; Day 03 &middot; Load Balancers &amp; Scaling</p>
+    <h1>Load Balancer Algorithm Race</h1>
+    <p class="lede">The same stream of requests, routed by three different algorithms. Watch how evenly the work actually lands on each server &mdash; not just how many requests each one gets.</p>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <p class="panel-label">Traffic &amp; algorithm</p>
+
+      <div class="field">
+        <label for="algo">Algorithm</label>
+        <select id="algo">
+          <option value="round-robin">Round robin</option>
+          <option value="weighted" selected>Weighted round robin</option>
+          <option value="least-connections">Least connections</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="servers">Servers <span class="val" id="serversVal">5</span></label>
+        <input type="range" id="servers" min="3" max="8" step="1" value="5" />
+      </div>
+
+      <div class="field">
+        <label for="requests">Requests to route <span class="val" id="requestsVal">30</span></label>
+        <input type="range" id="requests" min="15" max="60" step="1" value="30" />
+      </div>
+
+      <div class="field">
+        <label for="variability">Request duration variability <span class="val" id="variabilityVal">60%</span></label>
+        <input type="range" id="variability" min="0" max="100" step="5" value="60" />
+      </div>
+
+      <div class="constants">
+        Requests arrive steadily, one every 40ms. Base request duration is 150ms; the variability slider spreads individual requests wider or tighter around that. In weighted mode, Server 1 is configured 3&times; stronger than the rest.
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-label">Server load</p>
+
+      <div class="summary">
+        <span>Busiest vs quietest server:</span>
+        <span class="big" id="gapVal">&mdash;</span>
+        <span>gap in total work done.</span>
+      </div>
+
+      <div class="rows" id="rows"></div>
+
+      <div class="verdict" id="verdict">&mdash;</div>
+    </div>
+  </div>
+
+  <p class="footer">Built while learning system design, day by day &mdash; Day 03: Load Balancers &amp; Scaling.</p>
+</div>
+
+<script>
+(function () {
+  const algoEl = document.getElementById('algo');
+  const serversEl = document.getElementById('servers');
+  const requestsEl = document.getElementById('requests');
+  const variabilityEl = document.getElementById('variability');
+
+  const serversVal = document.getElementById('serversVal');
+  const requestsVal = document.getElementById('requestsVal');
+  const variabilityVal = document.getElementById('variabilityVal');
+
+  const gapVal = document.getElementById('gapVal');
+  const rowsEl = document.getElementById('rows');
+  const verdict = document.getElementById('verdict');
+
+  const ARRIVAL_INTERVAL = 40;
+  const BASE_DURATION = 150;
+
+  function pseudoRandom(i) {
+    const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function durationFor(i, variability) {
+    const spread = (pseudoRandom(i) - 0.5) * 2;
+    const d = BASE_DURATION * (1 + (variability / 100) * spread);
+    return Math.max(30, Math.round(d));
+  }
+
+  function smoothWeightedPick(state, weights, total) {
+    for (let j = 0; j < weights.length; j++) state.current[j] += weights[j];
+    let maxIdx = 0;
+    for (let j = 1; j < weights.length; j++) if (state.current[j] > state.current[maxIdx]) maxIdx = j;
+    state.current[maxIdx] -= total;
+    return maxIdx;
+  }
+
+  function simulate(N, R, variability, algorithm) {
+    const servers = Array.from({ length: N }, () => ({ count: 0, busy: 0, active: [] }));
+    const weights = Array.from({ length: N }, (_, idx) => (idx === 0 ? 3 : 1));
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    const wrrState = { current: Array(N).fill(0) };
+    let lcPointer = -1;
+
+    for (let i = 0; i < R; i++) {
+      const arrival = i * ARRIVAL_INTERVAL;
+      const dur = durationFor(i, variability);
+      let s;
+      if (algorithm === 'round-robin') {
+        s = i % N;
+      } else if (algorithm === 'weighted') {
+        s = smoothWeightedPick(wrrState, weights, totalWeight);
+      } else {
+        let minCount = Infinity, minIdx = 0;
+        for (let k = 0; k < N; k++) {
+          const j = (lcPointer + 1 + k) % N;
+          const activeCount = servers[j].active.filter(end => end > arrival).length;
+          if (activeCount < minCount) { minCount = activeCount; minIdx = j; }
+        }
+        lcPointer = minIdx;
+        s = minIdx;
+      }
+      const end = arrival + dur;
+      servers[s].count++;
+      servers[s].busy += dur;
+      servers[s].active.push(end);
+    }
+    return servers;
+  }
+
+  function recalc() {
+    const N = parseInt(serversEl.value, 10);
+    const R = parseInt(requestsEl.value, 10);
+    const V = parseInt(variabilityEl.value, 10);
+    const algorithm = algoEl.value;
+
+    serversVal.textContent = N;
+    requestsVal.textContent = R;
+    variabilityVal.textContent = V + '%';
+
+    const servers = simulate(N, R, V, algorithm);
+    const busyVals = servers.map(s => s.busy);
+    const maxBusy = Math.max(...busyVals) || 1;
+    const minBusy = Math.min(...busyVals);
+    const gapPct = maxBusy > 0 ? Math.round(((maxBusy - minBusy) / maxBusy) * 100) : 0;
+
+    gapVal.textContent = gapPct + '%';
+
+    rowsEl.innerHTML = '';
+    servers.forEach((s, idx) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = 'Server ' + (idx + 1);
+      if (algorithm === 'weighted' && idx === 0) {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = '3×';
+        name.appendChild(tag);
+      }
+
+      const track = document.createElement('div');
+      track.className = 'bar-track';
+      const fill = document.createElement('div');
+      fill.className = 'bar-fill';
+      fill.style.width = (s.busy / maxBusy * 100) + '%';
+      track.appendChild(fill);
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = s.count + ' reqs · ' + s.busy + 'ms busy';
+
+      row.appendChild(name);
+      row.appendChild(track);
+      row.appendChild(meta);
+      rowsEl.appendChild(row);
+    });
+
+    let verdictHtml;
+    if (algorithm === 'round-robin') {
+      verdictHtml = 'Round robin hands every server the same <strong>number</strong> of requests, but it never looks at how long any of them take. At <strong>' + V + '% duration variability</strong>, the busiest server still ends up doing <strong>' + gapPct + '% more work</strong> than the quietest &mdash; pure luck of which long requests landed where.';
+    } else if (algorithm === 'weighted') {
+      verdictHtml = 'Server 1 is configured <strong>3&times; stronger</strong> than the rest, and weighted round robin correctly sends it roughly 3&times; the requests &mdash; matching traffic to real capacity instead of splitting it blindly evenly.';
+    } else {
+      verdictHtml = 'Least connections routes every new request to whichever server is <strong>least busy right now</strong>, not whoever\'s turn is next. That closes the workload gap to <strong>' + gapPct + '%</strong> even with the same ' + V + '% duration variability round robin struggled with.';
+    }
+    verdictHtml += '<span class="fine-print">Simplified model: fixed arrival rate, deterministic pseudo-random durations (same requests across algorithm switches for a fair comparison), unlimited per-server concurrency.</span>';
+    verdict.innerHTML = verdictHtml;
+  }
+
+  [algoEl, serversEl, requestsEl, variabilityEl].forEach(el => el.addEventListener('input', recalc));
+  recalc();
+})();
+</script>
