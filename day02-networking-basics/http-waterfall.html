@@ -1,0 +1,368 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HTTP/1.1 vs HTTP/2 &mdash; System Design Lab</title>
+<style>
+  :root {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.18);
+    --track-bg: #E4E9F2;
+    --lane-bg: #F4F6FA;
+    --h1-block: #C2660D;
+    --h1-block-strong: #9C5209;
+    --h2-block: #2E7D8C;
+    --h2-block-strong: #1F5D69;
+    --good: #1B8A5A;
+    --good-bg: rgba(27, 138, 90, 0.1);
+    --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+      --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+      --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+      --track-bg: #1B2540; --lane-bg: #16203A;
+      --h1-block: #FFA94D; --h1-block-strong: #FFC287;
+      --h2-block: #52C7DB; --h2-block-strong: #8CDCEA;
+      --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+    --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+    --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+    --track-bg: #1B2540; --lane-bg: #16203A;
+    --h1-block: #FFA94D; --h1-block-strong: #FFC287;
+    --h2-block: #52C7DB; --h2-block-strong: #8CDCEA;
+    --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.12);
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF1F6; --panel: #FFFFFF; --panel-border: #D7DEE8; --panel-border-strong: #C1CADA;
+    --text: #12182B; --text-muted: #5B6478; --text-faint: #8791A8;
+    --accent: #C2660D; --accent-strong: #9C5209; --accent-glow: rgba(194, 102, 13, 0.18);
+    --track-bg: #E4E9F2; --lane-bg: #F4F6FA;
+    --h1-block: #C2660D; --h1-block-strong: #9C5209;
+    --h2-block: #2E7D8C; --h2-block-strong: #1F5D69;
+    --good: #1B8A5A; --good-bg: rgba(27, 138, 90, 0.1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    padding: clamp(16px, 4vw, 48px);
+  }
+
+  .rig { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-family: var(--font-display); font-size: clamp(24px, 4vw, 32px); font-weight: 800;
+    letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance;
+  }
+  .lede {
+    color: var(--text-muted); font-size: 15px; line-height: 1.55; max-width: 68ch; margin: 0;
+  }
+
+  .panels { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .panels { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 20px; }
+  .panel-label {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 16px;
+  }
+
+  .field { margin-bottom: 18px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .field label .val {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .constants {
+    margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--panel-border-strong);
+    font-size: 12px; color: var(--text-faint); line-height: 1.6;
+  }
+
+  .readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
+  @media (max-width: 480px) { .readouts { grid-template-columns: 1fr; } }
+  .gauge { border: 1px solid var(--panel-border); border-radius: 8px; padding: 14px 16px; }
+  .gauge.h1 { background: linear-gradient(180deg, color-mix(in srgb, var(--h1-block) 14%, transparent), transparent 60%); }
+  .gauge.h2 { background: linear-gradient(180deg, color-mix(in srgb, var(--h2-block) 14%, transparent), transparent 60%); }
+  .gauge .g-label {
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 6px;
+  }
+  .gauge .g-value {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: clamp(20px, 3vw, 26px);
+    font-weight: 700; margin: 0;
+  }
+  .gauge.h1 .g-value { color: var(--h1-block-strong); }
+  .gauge.h2 .g-value { color: var(--h2-block-strong); }
+  .gauge .g-unit { font-size: 12px; color: var(--text-faint); font-weight: 500; }
+
+  .speedup {
+    display: flex; align-items: baseline; gap: 8px; font-size: 14px; color: var(--text);
+    background: var(--good-bg); border-radius: 8px; padding: 10px 14px; margin-bottom: 22px;
+  }
+  .speedup .big {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 700;
+    font-size: 18px; color: var(--good);
+  }
+
+  .chart-block { margin-bottom: 18px; }
+  .chart-block:last-of-type { margin-bottom: 10px; }
+  .chart-title {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-muted); margin: 0 0 8px;
+  }
+  .chart-title .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .chart-title.h1 .swatch { background: var(--h1-block); }
+  .chart-title.h2 .swatch { background: var(--h2-block); }
+
+  .lanes {
+    position: relative;
+    background: var(--lane-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .lane {
+    position: relative;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .lane:last-child { border-bottom: none; }
+  .block {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    border-radius: 3px;
+  }
+  .block.h1 { background: var(--h1-block); opacity: 0.85; }
+  .block.h2 { background: var(--h2-block); opacity: 0.55; }
+
+  .ruler {
+    position: relative;
+    height: 20px;
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+  .ruler .mark {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .ruler .mark:first-child { transform: translateX(0); }
+  .ruler .mark:last-child { transform: translateX(-100%); }
+
+  .verdict {
+    border-top: 1px dashed var(--panel-border-strong);
+    margin-top: 16px; padding-top: 14px; font-size: 14px; line-height: 1.6; color: var(--text);
+  }
+  .verdict strong { color: var(--accent-strong); }
+  .verdict .fine-print { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); }
+
+  .footer { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); text-align: center; padding-top: 4px; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="rig">
+  <div>
+    <p class="eyebrow">System Design Lab &middot; Day 02 &middot; Networking Basics</p>
+    <h1>HTTP/1.1 vs HTTP/2: The Waterfall Race</h1>
+    <p class="lede">A browser loading a page needs to fetch dozens of small files. HTTP/1.1 queues them across a handful of parallel connections. HTTP/2 multiplexes all of them over a single connection. Watch what that difference actually costs.</p>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <p class="panel-label">Page &amp; network</p>
+
+      <div class="field">
+        <label for="reqCount">Requests on the page <span class="val" id="reqCountVal">36</span></label>
+        <input type="range" id="reqCount" min="5" max="80" step="1" value="36" />
+      </div>
+
+      <div class="field">
+        <label for="conns">Parallel connections <span class="val" id="connsVal">6</span></label>
+        <input type="range" id="conns" min="2" max="10" step="1" value="6" />
+      </div>
+
+      <div class="field">
+        <label for="rtt">Round-trip time per request <span class="val" id="rttVal">100 ms</span></label>
+        <input type="range" id="rtt" min="20" max="300" step="10" value="100" />
+      </div>
+
+      <div class="constants">
+        Assumes a 150ms one-time connection setup (TCP + TLS), and &mdash; for HTTP/2 only &mdash; a small 2ms per-stream framing cost. HTTP/1.1's connection limit is real (browsers cap it per domain); HTTP/2 needs only one connection regardless of request count.
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-label">Readouts</p>
+
+      <div class="readouts">
+        <div class="gauge h1">
+          <p class="g-label">HTTP/1.1 completes in</p>
+          <p class="g-value" id="h1Time">&mdash;</p>
+          <p class="g-unit">milliseconds</p>
+        </div>
+        <div class="gauge h2">
+          <p class="g-label">HTTP/2 completes in</p>
+          <p class="g-value" id="h2Time">&mdash;</p>
+          <p class="g-unit">milliseconds</p>
+        </div>
+      </div>
+
+      <div class="speedup">
+        <span>HTTP/2 finishes</span>
+        <span class="big" id="speedupVal">&mdash;</span>
+        <span>faster on this page.</span>
+      </div>
+
+      <div class="chart-block">
+        <p class="chart-title h1"><span class="swatch"></span>HTTP/1.1 &mdash; requests queued across connections</p>
+        <div class="lanes" id="h1Lanes"></div>
+      </div>
+
+      <div class="chart-block">
+        <p class="chart-title h2"><span class="swatch"></span>HTTP/2 &mdash; requests multiplexed on one connection</p>
+        <div class="lanes" id="h2Lanes"></div>
+      </div>
+
+      <div class="ruler" id="ruler"></div>
+
+      <div class="verdict" id="verdict">&mdash;</div>
+    </div>
+  </div>
+
+  <p class="footer">Built while learning system design, day by day &mdash; Day 02: Networking Basics.</p>
+</div>
+
+<script>
+(function () {
+  const reqCount = document.getElementById('reqCount');
+  const conns = document.getElementById('conns');
+  const rtt = document.getElementById('rtt');
+
+  const reqCountVal = document.getElementById('reqCountVal');
+  const connsVal = document.getElementById('connsVal');
+  const rttVal = document.getElementById('rttVal');
+
+  const h1TimeEl = document.getElementById('h1Time');
+  const h2TimeEl = document.getElementById('h2Time');
+  const speedupEl = document.getElementById('speedupVal');
+  const h1Lanes = document.getElementById('h1Lanes');
+  const h2Lanes = document.getElementById('h2Lanes');
+  const ruler = document.getElementById('ruler');
+  const verdict = document.getElementById('verdict');
+
+  const HANDSHAKE = 150;
+  const STREAM_OVERHEAD = 2;
+  const LANE_ROW_HEIGHT = 22;
+  const H2_TOTAL_HEIGHT = 132;
+
+  function recalc() {
+    const N = parseInt(reqCount.value, 10);
+    const C = parseInt(conns.value, 10);
+    const R = parseInt(rtt.value, 10);
+
+    reqCountVal.textContent = N;
+    connsVal.textContent = C;
+    rttVal.textContent = R + ' ms';
+
+    const waves = Math.ceil(N / C);
+    const h1Total = HANDSHAKE + waves * R;
+    const h2Total = HANDSHAKE + R + (N - 1) * STREAM_OVERHEAD;
+    const speedup = h1Total / h2Total;
+
+    h1TimeEl.textContent = h1Total.toLocaleString('en-US');
+    h2TimeEl.textContent = h2Total.toLocaleString('en-US');
+    speedupEl.textContent = speedup.toFixed(1) + '×';
+
+    const scale = Math.max(h1Total, h2Total) * 1.04;
+
+    // HTTP/1.1 lanes
+    h1Lanes.innerHTML = '';
+    h1Lanes.style.height = (C * LANE_ROW_HEIGHT) + 'px';
+    for (let lane = 0; lane < C; lane++) {
+      const laneEl = document.createElement('div');
+      laneEl.className = 'lane';
+      laneEl.style.height = LANE_ROW_HEIGHT + 'px';
+      h1Lanes.appendChild(laneEl);
+    }
+    const laneEls = h1Lanes.querySelectorAll('.lane');
+    for (let i = 0; i < N; i++) {
+      const lane = i % C;
+      const wave = Math.floor(i / C);
+      const start = HANDSHAKE + wave * R;
+      const block = document.createElement('div');
+      block.className = 'block h1';
+      block.style.left = (start / scale * 100) + '%';
+      block.style.width = Math.max((R / scale * 100), 0.4) + '%';
+      laneEls[lane].appendChild(block);
+    }
+
+    // HTTP/2 lane (single connection, many thin stacked rows)
+    h2Lanes.innerHTML = '';
+    h2Lanes.style.height = H2_TOTAL_HEIGHT + 'px';
+    const rowH = Math.max(H2_TOTAL_HEIGHT / N, 1.5);
+    for (let i = 0; i < N; i++) {
+      const laneEl = document.createElement('div');
+      laneEl.className = 'lane';
+      laneEl.style.height = rowH + 'px';
+      laneEl.style.borderBottom = 'none';
+      const start = HANDSHAKE + i * STREAM_OVERHEAD;
+      const block = document.createElement('div');
+      block.className = 'block h2';
+      block.style.top = '0';
+      block.style.bottom = '0';
+      block.style.left = (start / scale * 100) + '%';
+      block.style.width = Math.max((R / scale * 100), 0.4) + '%';
+      laneEl.appendChild(block);
+      h2Lanes.appendChild(laneEl);
+    }
+
+    // Ruler
+    ruler.innerHTML = '';
+    const steps = 5;
+    for (let s = 0; s <= steps; s++) {
+      const t = (scale / steps) * s;
+      const mark = document.createElement('span');
+      mark.className = 'mark';
+      mark.style.left = (s / steps * 100) + '%';
+      mark.textContent = Math.round(t) + 'ms';
+      ruler.appendChild(mark);
+    }
+
+    verdict.innerHTML = 'With <strong>' + N + ' requests</strong> and only <strong>' + C + ' parallel connections</strong>, HTTP/1.1 needs <strong>' + waves + ' sequential waves</strong> to get through them all &mdash; that queueing is the entire gap you see above. HTTP/2 pays the same one-time connection setup, then answers everything at once.<span class="fine-print">Simplified model: fixed round-trip time per request, no bandwidth contention, one-time 150ms handshake, 2ms/stream framing cost for HTTP/2. Real-world numbers vary with network conditions and server load.</span>';
+  }
+
+  [reqCount, conns, rtt].forEach(el => el.addEventListener('input', recalc));
+  recalc();
+})();
+</script>
