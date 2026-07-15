@@ -1,0 +1,346 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Read Replicas &amp; Staleness &mdash; System Design Lab</title>
+<style>
+  :root {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.18);
+    --bar-track: #E4E9F2;
+    --good: #1B8A5A;
+    --good-bg: rgba(27, 138, 90, 0.1);
+    --bad: #C23B3B;
+    --bad-bg: rgba(194, 59, 59, 0.1);
+    --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+      --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+      --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+      --bar-track: #1B2540;
+      --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.12);
+      --bad: #F87171; --bad-bg: rgba(248, 113, 113, 0.14);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+    --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+    --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+    --bar-track: #1B2540;
+    --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.12);
+    --bad: #F87171; --bad-bg: rgba(248, 113, 113, 0.14);
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF1F6; --panel: #FFFFFF; --panel-border: #D7DEE8; --panel-border-strong: #C1CADA;
+    --text: #12182B; --text-muted: #5B6478; --text-faint: #8791A8;
+    --accent: #C2660D; --accent-strong: #9C5209; --accent-glow: rgba(194, 102, 13, 0.18);
+    --bar-track: #E4E9F2;
+    --good: #1B8A5A; --good-bg: rgba(27, 138, 90, 0.1);
+    --bad: #C23B3B; --bad-bg: rgba(194, 59, 59, 0.1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased; padding: clamp(16px, 4vw, 48px);
+  }
+
+  .rig { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-family: var(--font-display); font-size: clamp(22px, 4vw, 30px); font-weight: 800;
+    letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance;
+  }
+  .lede { color: var(--text-muted); font-size: 15px; line-height: 1.55; max-width: 68ch; margin: 0; }
+
+  .panels { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 780px) { .panels { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 20px; }
+  .panel-label {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 16px;
+  }
+  .section-label {
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--text-faint); margin: 20px 0 14px; padding-top: 16px; border-top: 1px dashed var(--panel-border-strong);
+  }
+  .section-label:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+
+  .field { margin-bottom: 18px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .field label .val {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .readouts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+  @media (max-width: 480px) { .readouts { grid-template-columns: 1fr; } }
+  .gauge { border: 1px solid var(--panel-border); border-radius: 8px; padding: 14px 16px; background: linear-gradient(180deg, var(--accent-glow), transparent 60%); }
+  .gauge .g-label { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 6px; }
+  .gauge .g-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: clamp(19px, 3vw, 24px); font-weight: 700; color: var(--accent-strong); margin: 0; }
+  .gauge .g-unit { font-size: 12px; color: var(--text-faint); font-weight: 500; }
+
+  .risk-banner {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 14px; color: var(--text);
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 22px;
+  }
+  .risk-banner.low { background: var(--good-bg); }
+  .risk-banner.high { background: var(--bad-bg); }
+  .risk-banner .big {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 700; font-size: 18px;
+  }
+  .risk-banner.low .big { color: var(--good); }
+  .risk-banner.high .big { color: var(--bad); }
+
+  .timeline-wrap { position: relative; margin-bottom: 6px; }
+  .rows { display: flex; flex-direction: column; gap: 6px; }
+  .replica-row { display: grid; grid-template-columns: 76px 1fr 62px; align-items: center; gap: 10px; }
+  @media (max-width: 480px) {
+    .replica-row { grid-template-columns: 56px 1fr 50px; }
+  }
+  .replica-row .rname { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+  .track { position: relative; height: 16px; background: var(--bar-track); border-radius: 4px; }
+  .catchup-dot {
+    position: absolute; top: 50%; width: 10px; height: 10px; border-radius: 50%;
+    transform: translate(-50%, -50%); border: 2px solid var(--panel);
+  }
+  .catchup-dot.fresh { background: var(--good); }
+  .catchup-dot.stale { background: var(--bad); }
+  .status-chip {
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; text-align: right;
+    letter-spacing: 0.04em;
+  }
+  .status-chip.fresh { color: var(--good); }
+  .status-chip.stale { color: var(--bad); }
+
+  .read-line {
+    position: absolute; top: 0; bottom: 0; width: 0;
+    border-left: 2px dashed var(--text-faint);
+    pointer-events: none;
+  }
+  .read-line .flag {
+    position: absolute; top: -22px; transform: translateX(-50%);
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; color: var(--text);
+    background: var(--panel); border: 1px solid var(--panel-border-strong); border-radius: 5px;
+    padding: 2px 6px; white-space: nowrap;
+  }
+
+  .more-note { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin-top: 8px; }
+
+  .verdict {
+    border-top: 1px dashed var(--panel-border-strong); margin-top: 20px; padding-top: 16px;
+    font-size: 14px; line-height: 1.6; color: var(--text);
+  }
+  .verdict strong { color: var(--accent-strong); }
+  .verdict .fine-print { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); }
+
+  .footer { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); text-align: center; padding-top: 4px; }
+</style>
+
+<div class="rig">
+  <div>
+    <p class="eyebrow">System Design Lab &middot; Day 04 &middot; Databases I</p>
+    <h1>Read Replicas: Scaling Reads, and the Staleness You Trade For It</h1>
+    <p class="lede">One primary takes the writes. Read replicas absorb the rest. But replication isn't instant &mdash; so what happens when someone reads a replica microseconds after someone else wrote to the primary?</p>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <p class="panel-label">Inputs</p>
+
+      <p class="section-label">Traffic</p>
+      <div class="field">
+        <label for="readQps">Peak read QPS <span class="val" id="readQpsVal">5,000</span></label>
+        <input type="range" id="readQps" min="100" max="20000" step="100" value="5000" />
+      </div>
+      <div class="field">
+        <label for="writeQps">Write QPS <span class="val" id="writeQpsVal">50</span></label>
+        <input type="range" id="writeQps" min="5" max="1000" step="5" value="50" />
+      </div>
+      <div class="field">
+        <label for="capacity">Capacity per server <span class="val" id="capacityVal">1,000 req/s</span></label>
+        <input type="range" id="capacity" min="200" max="3000" step="100" value="1000" />
+      </div>
+
+      <p class="section-label">Replication</p>
+      <div class="field">
+        <label for="maxLag">Worst-case replication lag <span class="val" id="maxLagVal">300 ms</span></label>
+        <input type="range" id="maxLag" min="0" max="1000" step="10" value="300" />
+      </div>
+      <div class="field">
+        <label for="readDelay">Time between write and read <span class="val" id="readDelayVal">200 ms</span></label>
+        <input type="range" id="readDelay" min="0" max="1000" step="10" value="200" />
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-label">Readouts</p>
+
+      <div class="readouts">
+        <div class="gauge">
+          <p class="g-label">Read replicas needed</p>
+          <p class="g-value" id="replicasVal">&mdash;</p>
+          <p class="g-unit">at peak read load</p>
+        </div>
+        <div class="gauge">
+          <p class="g-label">Primary load from writes</p>
+          <p class="g-value" id="primaryLoadVal">&mdash;</p>
+          <p class="g-unit">of one server's capacity</p>
+        </div>
+      </div>
+
+      <div class="risk-banner" id="riskBanner">
+        <span>Stale-read risk at this delay:</span>
+        <span class="big" id="staleRiskVal">&mdash;</span>
+      </div>
+
+      <div class="timeline-wrap" id="timelineWrap">
+        <div class="rows" id="rows"></div>
+        <div class="read-line" id="readLine"><span class="flag" id="readFlag">read</span></div>
+      </div>
+      <p class="more-note" id="moreNote"></p>
+
+      <div class="verdict" id="verdict">&mdash;</div>
+    </div>
+  </div>
+
+  <p class="footer">Built while learning system design, day by day &mdash; Day 04: Databases I.</p>
+</div>
+
+<script>
+(function () {
+  const readQps = document.getElementById('readQps');
+  const writeQps = document.getElementById('writeQps');
+  const capacity = document.getElementById('capacity');
+  const maxLag = document.getElementById('maxLag');
+  const readDelay = document.getElementById('readDelay');
+
+  const readQpsVal = document.getElementById('readQpsVal');
+  const writeQpsVal = document.getElementById('writeQpsVal');
+  const capacityVal = document.getElementById('capacityVal');
+  const maxLagVal = document.getElementById('maxLagVal');
+  const readDelayVal = document.getElementById('readDelayVal');
+
+  const replicasVal = document.getElementById('replicasVal');
+  const primaryLoadVal = document.getElementById('primaryLoadVal');
+  const riskBanner = document.getElementById('riskBanner');
+  const staleRiskVal = document.getElementById('staleRiskVal');
+  const rowsEl = document.getElementById('rows');
+  const readLine = document.getElementById('readLine');
+  const readFlag = document.getElementById('readFlag');
+  const moreNote = document.getElementById('moreNote');
+  const verdict = document.getElementById('verdict');
+
+  const MAX_RENDERED_REPLICAS = 10;
+
+  function fmtInt(n) { return Math.round(n).toLocaleString('en-US'); }
+
+  function pseudoRandom(i) {
+    const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function recalc() {
+    const R = parseInt(readQps.value, 10);
+    const W = parseInt(writeQps.value, 10);
+    const C = parseInt(capacity.value, 10);
+    const L = parseInt(maxLag.value, 10);
+    const D = parseInt(readDelay.value, 10);
+
+    readQpsVal.textContent = fmtInt(R);
+    writeQpsVal.textContent = fmtInt(W);
+    capacityVal.textContent = fmtInt(C) + ' req/s';
+    maxLagVal.textContent = L + ' ms';
+    readDelayVal.textContent = D + ' ms';
+
+    const replicasNeeded = Math.max(1, Math.ceil(R / C));
+    const primaryLoadPct = Math.min(999, Math.round((W / C) * 100));
+
+    replicasVal.textContent = replicasNeeded;
+    primaryLoadVal.textContent = primaryLoadPct + '%';
+
+    const renderCount = Math.min(replicasNeeded, MAX_RENDERED_REPLICAS);
+    const lags = [];
+    for (let i = 0; i < renderCount; i++) lags.push(L * pseudoRandom(i));
+
+    const staleCount = lags.filter(lag => lag > D).length;
+    const stalePct = renderCount > 0 ? Math.round((staleCount / renderCount) * 100) : 0;
+
+    staleRiskVal.textContent = stalePct + '%';
+    riskBanner.className = 'risk-banner ' + (stalePct >= 40 ? 'high' : 'low');
+
+    const scale = Math.max(L, D, 1) * 1.15;
+
+    rowsEl.innerHTML = '';
+    lags.forEach((lag, i) => {
+      const row = document.createElement('div');
+      row.className = 'replica-row';
+
+      const name = document.createElement('div');
+      name.className = 'rname';
+      name.textContent = 'Replica ' + (i + 1);
+
+      const track = document.createElement('div');
+      track.className = 'track';
+      const dot = document.createElement('div');
+      const isStale = lag > D;
+      dot.className = 'catchup-dot ' + (isStale ? 'stale' : 'fresh');
+      dot.style.left = Math.min(99, (lag / scale) * 100) + '%';
+      track.appendChild(dot);
+
+      const chip = document.createElement('div');
+      chip.className = 'status-chip ' + (isStale ? 'stale' : 'fresh');
+      chip.textContent = isStale ? 'STALE' : 'FRESH';
+
+      row.appendChild(name);
+      row.appendChild(track);
+      row.appendChild(chip);
+      rowsEl.appendChild(row);
+    });
+
+    readLine.style.left = (D / scale * 100) + '%';
+    readFlag.textContent = D + 'ms';
+
+    if (replicasNeeded > MAX_RENDERED_REPLICAS) {
+      moreNote.textContent = '+ ' + (replicasNeeded - MAX_RENDERED_REPLICAS) + ' more replicas not shown (same pattern continues).';
+    } else {
+      moreNote.textContent = '';
+    }
+
+    let verdictHtml;
+    if (stalePct === 0) {
+      verdictHtml = 'Every replica catches up well before <strong>' + D + 'ms</strong> passes, so a read at that delay always sees the write. Safe &mdash; but only because the delay happens to be generous here.';
+    } else if (stalePct < 40) {
+      verdictHtml = 'About <strong>' + stalePct + '% of replicas</strong> are still catching up when the read happens at <strong>' + D + 'ms</strong>. A reader hitting one of those would briefly miss the write &mdash; usually harmless for a social feed, less so for "did my payment go through."';
+    } else {
+      verdictHtml = 'At <strong>' + stalePct + '% stale risk</strong>, most reads within ' + D + 'ms of a write would hit a replica that hasn\'t caught up yet. That\'s the real cost of async replication: you scaled reads, but you also chose availability and speed over always-latest data.';
+    }
+    verdictHtml += '<span class="fine-print">Simplified model: each replica\'s catch-up time is randomly spread between 0 and the worst-case lag; reads are assumed to hit a random replica. Real replication lag depends on write volume, network, and replica load.</span>';
+    verdict.innerHTML = verdictHtml;
+  }
+
+  [readQps, writeQps, capacity, maxLag, readDelay].forEach(el => el.addEventListener('input', recalc));
+  recalc();
+})();
+</script>
