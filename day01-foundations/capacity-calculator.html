@@ -258,6 +258,9 @@
     top: -22px;
     transform: translateX(-50%);
     transition: left .25s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
   }
   .pin .flag {
     font-family: var(--font-mono);
@@ -270,14 +273,12 @@
     border-radius: 5px;
     padding: 3px 7px;
     white-space: nowrap;
-    transform: translateX(-50%);
-    margin-left: 4px;
   }
   .pin .needle {
     width: 2px;
     height: 16px;
     background: var(--text);
-    margin: 3px auto 0;
+    margin-top: 3px;
   }
 
   .verdict {
