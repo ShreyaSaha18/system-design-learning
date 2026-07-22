@@ -1,0 +1,256 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resharding Pain Simulator &mdash; System Design Lab</title>
+<style>
+  :root {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.18);
+    --good: #1B8A5A;
+    --good-bg: rgba(27, 138, 90, 0.14);
+    --good-border: rgba(27, 138, 90, 0.35);
+    --bad: #C23B3B;
+    --bad-bg: rgba(194, 59, 59, 0.12);
+    --bad-border: rgba(194, 59, 59, 0.35);
+    --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+      --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+      --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+      --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.14); --good-border: rgba(74, 222, 128, 0.35);
+      --bad: #F87171; --bad-bg: rgba(248, 113, 113, 0.14); --bad-border: rgba(248, 113, 113, 0.4);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+    --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+    --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+    --good: #4ADE80; --good-bg: rgba(74, 222, 128, 0.14); --good-border: rgba(74, 222, 128, 0.35);
+    --bad: #F87171; --bad-bg: rgba(248, 113, 113, 0.14); --bad-border: rgba(248, 113, 113, 0.4);
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF1F6; --panel: #FFFFFF; --panel-border: #D7DEE8; --panel-border-strong: #C1CADA;
+    --text: #12182B; --text-muted: #5B6478; --text-faint: #8791A8;
+    --accent: #C2660D; --accent-strong: #9C5209; --accent-glow: rgba(194, 102, 13, 0.18);
+    --good: #1B8A5A; --good-bg: rgba(27, 138, 90, 0.14); --good-border: rgba(27, 138, 90, 0.35);
+    --bad: #C23B3B; --bad-bg: rgba(194, 59, 59, 0.12); --bad-border: rgba(194, 59, 59, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased; padding: clamp(16px, 4vw, 48px);
+  }
+
+  .rig { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-family: var(--font-display); font-size: clamp(22px, 4vw, 30px); font-weight: 800;
+    letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance;
+  }
+  .lede { color: var(--text-muted); font-size: 15px; line-height: 1.55; max-width: 68ch; margin: 0; }
+
+  .panels { display: grid; grid-template-columns: minmax(0, 280px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 780px) { .panels { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 20px; }
+  .panel-label {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 16px;
+  }
+
+  .field { margin-bottom: 18px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .field label .val {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .constants {
+    margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--panel-border-strong);
+    font-size: 12px; color: var(--text-faint); line-height: 1.6;
+  }
+
+  .stat-banner {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 14px; color: var(--text);
+    background: var(--accent-glow); border-radius: 8px; padding: 12px 16px; margin-bottom: 20px;
+  }
+  .stat-banner .big {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 700;
+    font-size: 22px; color: var(--accent-strong);
+  }
+
+  .legend { display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-muted); }
+  .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+  .legend .swatch.stayed { background: var(--good); }
+  .legend .swatch.moved { background: var(--bad); }
+
+  .keygrid {
+    display: grid;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  @media (max-width: 560px) { .keygrid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+  @media (max-width: 380px) { .keygrid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+  .key-cell {
+    border-radius: 6px;
+    border: 1px solid;
+    padding: 6px 2px;
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.3;
+  }
+  .key-cell.stayed { background: var(--good-bg); border-color: var(--good-border); color: var(--good); }
+  .key-cell.moved { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
+  .key-cell .arrow { display: block; color: var(--text-faint); }
+
+  .sample-note { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); margin: 8px 0 0; }
+
+  .verdict {
+    border-top: 1px dashed var(--panel-border-strong); margin-top: 18px; padding-top: 16px;
+    font-size: 14px; line-height: 1.6; color: var(--text);
+  }
+  .verdict strong { color: var(--accent-strong); }
+  .verdict .fine-print { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); }
+
+  .footer { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); text-align: center; padding-top: 4px; }
+</style>
+
+<div class="rig">
+  <div>
+    <p class="eyebrow">System Design Lab &middot; Day 05 &middot; Sharding &amp; CAP Theorem</p>
+    <h1>Resharding Pain Simulator</h1>
+    <p class="lede">You have a hash-sharded database and traffic just outgrew it. How much does it actually cost to add more shards when every key's location is decided by <code>hash(key) % N</code>?</p>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <p class="panel-label">Cluster change</p>
+
+      <div class="field">
+        <label for="oldN">Shards before <span class="val" id="oldNVal">8</span></label>
+        <input type="range" id="oldN" min="2" max="16" step="1" value="8" />
+      </div>
+
+      <div class="field">
+        <label for="newN">Shards after <span class="val" id="newNVal">12</span></label>
+        <input type="range" id="newN" min="2" max="16" step="1" value="12" />
+      </div>
+
+      <div class="constants">
+        Each key's shard is assigned by <code>hash(key) % N</code>. Nothing about the keys changes when you resize the cluster &mdash; only <code>N</code> does. That's the whole problem.
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-label">What has to move</p>
+
+      <div class="stat-banner">
+        <span>Keys that land on a different shard after resizing:</span>
+        <span class="big" id="movedPct">&mdash;</span>
+      </div>
+
+      <div class="legend">
+        <span><span class="swatch stayed"></span>same shard number</span>
+        <span><span class="swatch moved"></span>different shard &mdash; must migrate</span>
+      </div>
+
+      <div class="keygrid" id="keygrid"></div>
+      <p class="sample-note" id="sampleNote"></p>
+
+      <div class="verdict" id="verdict">&mdash;</div>
+    </div>
+  </div>
+
+  <p class="footer">Built while learning system design, day by day &mdash; Day 05: Sharding &amp; CAP Theorem.</p>
+</div>
+
+<script>
+(function () {
+  const oldNEl = document.getElementById('oldN');
+  const newNEl = document.getElementById('newN');
+  const oldNVal = document.getElementById('oldNVal');
+  const newNVal = document.getElementById('newNVal');
+  const movedPct = document.getElementById('movedPct');
+  const keygrid = document.getElementById('keygrid');
+  const sampleNote = document.getElementById('sampleNote');
+  const verdict = document.getElementById('verdict');
+
+  const STAT_SAMPLE = 500;
+  const GRID_SAMPLE = 48;
+
+  function pseudoRandom(i) {
+    const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function recalc() {
+    const oldN = parseInt(oldNEl.value, 10);
+    const newN = parseInt(newNEl.value, 10);
+
+    oldNVal.textContent = oldN;
+    newNVal.textContent = newN;
+
+    let movedCount = 0;
+    const gridItems = [];
+    for (let i = 0; i < STAT_SAMPLE; i++) {
+      const x = pseudoRandom(i);
+      const oldShard = Math.floor(x * oldN);
+      const newShard = Math.floor(x * newN);
+      const moved = oldShard !== newShard;
+      if (moved) movedCount++;
+      if (i < GRID_SAMPLE) gridItems.push({ oldShard, newShard, moved });
+    }
+
+    const pct = Math.round((movedCount / STAT_SAMPLE) * 100);
+    movedPct.textContent = pct + '%';
+
+    keygrid.innerHTML = '';
+    gridItems.forEach((item) => {
+      const cell = document.createElement('div');
+      cell.className = 'key-cell ' + (item.moved ? 'moved' : 'stayed');
+      cell.innerHTML = 'S' + item.oldShard + '<span class="arrow">&darr;</span>S' + item.newShard;
+      keygrid.appendChild(cell);
+    });
+
+    sampleNote.textContent = 'Showing ' + GRID_SAMPLE + ' of ' + STAT_SAMPLE + ' simulated keys used for the percentage above.';
+
+    let verdictHtml;
+    if (oldN === newN) {
+      verdictHtml = 'No change in shard count means no keys move &mdash; this is the baseline. Try dragging "shards after" to see the cost of resizing.';
+    } else {
+      verdictHtml = 'Going from <strong>' + oldN + '</strong> to <strong>' + newN + '</strong> shards forces roughly <strong>' + pct + '% of all keys</strong> to migrate to a different shard &mdash; even though ' + Math.min(oldN, newN) + ' of the shards involved physically still exist. Plain <code>hash % N</code> doesn\'t know that; changing the divisor reshuffles almost everything. This is exactly the problem <strong>consistent hashing</strong> is built to solve, by only remapping the keys that actually need to move &mdash; a full lesson on its own, coming later in this series.';
+    }
+    verdictHtml += '<span class="fine-print">Simplified model: keys are simulated as 500 deterministic pseudo-random values in [0,1), shard assigned via floor(x&times;N) as a stand-in for hash(key) % N. The reshuffling behavior it demonstrates matches real hash-mod-N resharding.</span>';
+    verdict.innerHTML = verdictHtml;
+  }
+
+  [oldNEl, newNEl].forEach(el => el.addEventListener('input', recalc));
+  recalc();
+})();
+</script>
