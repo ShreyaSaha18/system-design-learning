@@ -1,0 +1,284 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cache Stampede Simulator &mdash; System Design Lab</title>
+<style>
+  :root {
+    --bg: #EEF1F6;
+    --panel: #FFFFFF;
+    --panel-border: #D7DEE8;
+    --panel-border-strong: #C1CADA;
+    --text: #12182B;
+    --text-muted: #5B6478;
+    --text-faint: #8791A8;
+    --accent: #C2660D;
+    --accent-strong: #9C5209;
+    --accent-glow: rgba(194, 102, 13, 0.18);
+    --bar-track: #E4E9F2;
+    --bad: #C23B3B;
+    --bad-strong: #9C2E2E;
+    --good: #1B8A5A;
+    --good-strong: #146B45;
+    --good-bg: rgba(27, 138, 90, 0.1);
+    --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Roboto Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+      --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+      --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+      --bar-track: #1B2540;
+      --bad: #F87171; --bad-strong: #FCA5A5;
+      --good: #4ADE80; --good-strong: #86EFAC; --good-bg: rgba(74, 222, 128, 0.12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0B1220; --panel: #121B2E; --panel-border: #243252; --panel-border-strong: #344368;
+    --text: #E7ECF7; --text-muted: #93A0BE; --text-faint: #5E6B8C;
+    --accent: #FFA94D; --accent-strong: #FFC287; --accent-glow: rgba(255, 169, 77, 0.22);
+    --bar-track: #1B2540;
+    --bad: #F87171; --bad-strong: #FCA5A5;
+    --good: #4ADE80; --good-strong: #86EFAC; --good-bg: rgba(74, 222, 128, 0.12);
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF1F6; --panel: #FFFFFF; --panel-border: #D7DEE8; --panel-border-strong: #C1CADA;
+    --text: #12182B; --text-muted: #5B6478; --text-faint: #8791A8;
+    --accent: #C2660D; --accent-strong: #9C5209; --accent-glow: rgba(194, 102, 13, 0.18);
+    --bar-track: #E4E9F2;
+    --bad: #C23B3B; --bad-strong: #9C2E2E;
+    --good: #1B8A5A; --good-strong: #146B45; --good-bg: rgba(27, 138, 90, 0.1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased; padding: clamp(16px, 4vw, 48px);
+  }
+
+  .rig { max-width: 1040px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-family: var(--font-display); font-size: clamp(22px, 4vw, 30px); font-weight: 800;
+    letter-spacing: -0.01em; margin: 4px 0 0; text-wrap: balance;
+  }
+  .lede { color: var(--text-muted); font-size: 15px; line-height: 1.55; max-width: 68ch; margin: 0; }
+
+  .panels { display: grid; grid-template-columns: minmax(0, 280px) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 780px) { .panels { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 20px; }
+  .panel-label {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-faint); margin: 0 0 16px;
+  }
+
+  .field { margin-bottom: 18px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 13px; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .field label .val {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600;
+  }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .constants {
+    margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--panel-border-strong);
+    font-size: 12px; color: var(--text-faint); line-height: 1.6;
+  }
+
+  .headline {
+    font-size: 14px; color: var(--text); background: var(--good-bg); border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 20px; line-height: 1.55;
+  }
+  .headline strong { color: var(--bad-strong); }
+
+  .strategy { margin-bottom: 18px; }
+  .strategy:last-child { margin-bottom: 4px; }
+  .strategy-head {
+    display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px;
+  }
+  .strategy-name { font-family: var(--font-display); font-size: 14px; font-weight: 700; color: var(--text); }
+  .strategy-desc { font-size: 12px; color: var(--text-faint); margin: 2px 0 0; }
+
+  .metric-row { display: grid; grid-template-columns: 108px 1fr 84px; align-items: center; gap: 10px; margin-bottom: 6px; }
+  @media (max-width: 480px) { .metric-row { grid-template-columns: 76px 1fr 70px; } }
+  .metric-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+  .metric-track { position: relative; height: 14px; background: var(--bar-track); border-radius: 4px; overflow: hidden; }
+  .metric-fill { position: absolute; top: 0; left: 0; bottom: 0; border-radius: 4px; transition: width .25s ease; }
+  .metric-fill.bad { background: linear-gradient(90deg, var(--bad), var(--bad-strong)); }
+  .metric-fill.good { background: linear-gradient(90deg, var(--good), var(--good-strong)); }
+  .metric-value {
+    font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; text-align: right;
+    color: var(--text); white-space: nowrap;
+  }
+
+  .verdict {
+    border-top: 1px dashed var(--panel-border-strong); margin-top: 18px; padding-top: 16px;
+    font-size: 14px; line-height: 1.6; color: var(--text);
+  }
+  .verdict strong { color: var(--accent-strong); }
+  .verdict .fine-print { display: block; margin-top: 6px; font-size: 12px; color: var(--text-faint); }
+
+  .footer { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); text-align: center; padding-top: 4px; }
+</style>
+
+<div class="rig">
+  <div>
+    <p class="eyebrow">System Design Lab &middot; Day 06 &middot; Caching</p>
+    <h1>Cache Stampede Simulator</h1>
+    <p class="lede">A popular cache key just expired, and a burst of concurrent requests all miss at once. What happens next depends entirely on which mitigation &mdash; if any &mdash; you built in.</p>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <p class="panel-label">The moment of expiry</p>
+
+      <div class="field">
+        <label for="concurrent">Concurrent requests at expiry <span class="val" id="concurrentVal">150</span></label>
+        <input type="range" id="concurrent" min="5" max="500" step="5" value="150" />
+      </div>
+
+      <div class="field">
+        <label for="dbTime">DB query time (uncontended) <span class="val" id="dbTimeVal">150 ms</span></label>
+        <input type="range" id="dbTime" min="20" max="500" step="10" value="150" />
+      </div>
+
+      <div class="constants">
+        Assumes the DB handles about 20 identical concurrent queries comfortably; beyond that, each extra concurrent query adds real contention and slows every query down. Cache hits are assumed to take 5ms.
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-label">What each strategy does</p>
+
+      <div class="headline" id="headline">&mdash;</div>
+
+      <div class="strategy" id="strategy-none">
+        <div class="strategy-head">
+          <span class="strategy-name">No mitigation</span>
+        </div>
+        <p class="strategy-desc">Every request that misses queries the database itself.</p>
+        <div class="metric-row">
+          <span class="metric-label">DB queries</span>
+          <div class="metric-track"><div class="metric-fill bad" id="noneDbFill"></div></div>
+          <span class="metric-value" id="noneDbVal">&mdash;</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">User latency</span>
+          <div class="metric-track"><div class="metric-fill bad" id="noneLatFill"></div></div>
+          <span class="metric-value" id="noneLatVal">&mdash;</span>
+        </div>
+      </div>
+
+      <div class="strategy" id="strategy-lock">
+        <div class="strategy-head">
+          <span class="strategy-name">Locking / mutex</span>
+        </div>
+        <p class="strategy-desc">Only the first request queries the DB; the rest wait for it.</p>
+        <div class="metric-row">
+          <span class="metric-label">DB queries</span>
+          <div class="metric-track"><div class="metric-fill good" id="lockDbFill"></div></div>
+          <span class="metric-value" id="lockDbVal">&mdash;</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">User latency</span>
+          <div class="metric-track"><div class="metric-fill bad" id="lockLatFill"></div></div>
+          <span class="metric-value" id="lockLatVal">&mdash;</span>
+        </div>
+      </div>
+
+      <div class="strategy" id="strategy-swr">
+        <div class="strategy-head">
+          <span class="strategy-name">Stale-while-revalidate</span>
+        </div>
+        <p class="strategy-desc">Everyone gets the stale value instantly; one background request refreshes it.</p>
+        <div class="metric-row">
+          <span class="metric-label">DB queries</span>
+          <div class="metric-track"><div class="metric-fill good" id="swrDbFill"></div></div>
+          <span class="metric-value" id="swrDbVal">&mdash;</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">User latency</span>
+          <div class="metric-track"><div class="metric-fill good" id="swrLatFill"></div></div>
+          <span class="metric-value" id="swrLatVal">&mdash;</span>
+        </div>
+      </div>
+
+      <div class="verdict" id="verdict">&mdash;</div>
+    </div>
+  </div>
+
+  <p class="footer">Built while learning system design, day by day &mdash; Day 06: Caching.</p>
+</div>
+
+<script>
+(function () {
+  const concurrentEl = document.getElementById('concurrent');
+  const dbTimeEl = document.getElementById('dbTime');
+  const concurrentVal = document.getElementById('concurrentVal');
+  const dbTimeVal = document.getElementById('dbTimeVal');
+  const headline = document.getElementById('headline');
+  const verdict = document.getElementById('verdict');
+
+  const CACHE_HIT_LATENCY = 5;
+  const DB_CAPACITY = 20;
+
+  function fmtInt(n) { return Math.round(n).toLocaleString('en-US'); }
+
+  function setBar(fillId, valId, value, max, unit) {
+    const fill = document.getElementById(fillId);
+    const val = document.getElementById(valId);
+    const pct = max > 0 ? Math.max(1.5, Math.min(100, (value / max) * 100)) : 0;
+    fill.style.width = pct + '%';
+    val.textContent = fmtInt(value) + unit;
+  }
+
+  function recalc() {
+    const N = parseInt(concurrentEl.value, 10);
+    const dbTime = parseInt(dbTimeEl.value, 10);
+
+    concurrentVal.textContent = N;
+    dbTimeVal.textContent = dbTime + ' ms';
+
+    // No mitigation
+    const noneDbQueries = N;
+    const contention = Math.max(1, N / DB_CAPACITY);
+    const noneLatency = dbTime * contention;
+
+    // Locking
+    const lockDbQueries = 1;
+    const lockLatency = dbTime;
+
+    // Stale-while-revalidate
+    const swrDbQueries = 1;
+    const swrLatency = CACHE_HIT_LATENCY;
+
+    const maxDb = noneDbQueries;
+    const maxLat = Math.max(noneLatency, lockLatency, swrLatency);
+
+    setBar('noneDbFill', 'noneDbVal', noneDbQueries, maxDb, '');
+    setBar('noneLatFill', 'noneLatVal', noneLatency, maxLat, 'ms');
+    setBar('lockDbFill', 'lockDbVal', lockDbQueries, maxDb, '');
+    setBar('lockLatFill', 'lockLatVal', lockLatency, maxLat, 'ms');
+    setBar('swrDbFill', 'swrDbVal', swrDbQueries, maxDb, '');
+    setBar('swrLatFill', 'swrLatVal', swrLatency, maxLat, 'ms');
+
+    headline.innerHTML = 'With no mitigation, this expiry sends <strong>' + fmtInt(noneDbQueries) + ' simultaneous queries</strong> at your database. Locking and stale-while-revalidate both bring that down to just <strong>1</strong>.';
+
+    const speedup = (noneLatency / swrLatency).toFixed(0);
+    verdict.innerHTML = 'Locking protects the database (1 query instead of ' + fmtInt(N) + ') but every waiting user still pays close to the full <strong>' + fmtInt(lockLatency) + 'ms</strong> DB round trip. Stale-while-revalidate protects the database <em>and</em> keeps users fast (<strong>' + fmtInt(swrLatency) + 'ms</strong>, about ' + speedup + '&times; quicker) &mdash; the trade is that everyone briefly sees slightly outdated data instead of the freshest possible value.<span class="fine-print">Simplified model: DB contention modeled as linear slowdown past 20 concurrent queries; locking assumes waiters pay roughly the holder\'s latency; real systems vary with connection pools and query complexity.</span>';
+  }
+
+  [concurrentEl, dbTimeEl].forEach(el => el.addEventListener('input', recalc));
+  recalc();
+})();
+</script>
